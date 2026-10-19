@@ -968,11 +968,21 @@ class FfiModel with ChangeNotifier {
           sessionId, type, title, text, link, hasRetry, dialogManager);
     } else {
       var hasRetry = evt['hasRetry'] == 'true';
-      if (!hasRetry) {
-        hasRetry = shouldAutoRetryOnTransientSessionError(
-            type, title, text, peerId);
+      final isTransientSessionError = isTransientEstablishedSessionError(
+          type, title, text, peerId);
+      final suppressTransientError =
+          isTransientSessionError &&
+              shouldAutoRetryOnTransientSessionError(
+                  type, title, text, peerId);
+
+      if (isTransientSessionError) {
+        // Keep transient established-session failures inside one bounded
+        // recovery window, even when Rust already marked the error retryable.
+        hasRetry = suppressTransientError;
       }
-      showMsgBox(sessionId, type, title, text, link, hasRetry, dialogManager);
+
+      showMsgBox(sessionId, type, title, text, link, hasRetry, dialogManager,
+          suppressError: suppressTransientError);
     }
   }
 
@@ -998,6 +1008,24 @@ class FfiModel with ChangeNotifier {
     reconnect(parent.target!.dialogManager, sessionId, false);
   }
 
+  bool isTransientEstablishedSessionError(
+    String type,
+    String title,
+    String text,
+    String peerId,
+  ) {
+    if (type != 'error' ||
+        title != 'Connection Error' ||
+        !_pi.isSet.isTrue) {
+      return false;
+    }
+
+    return text == 'Remote desktop is offline' ||
+        text == 'Reset by the peer' ||
+        (peerId.isNotEmpty &&
+            text == 'Failed to connect to $peerId: Please try later');
+  }
+
   /// Auto-retry transient connection errors after an established session.
   /// returns true to auto-retry, false otherwise.
   bool shouldAutoRetryOnTransientSessionError(
@@ -1006,13 +1034,8 @@ class FfiModel with ChangeNotifier {
     String text,
     String peerId,
   ) {
-    final isTransientSessionError = text == 'Remote desktop is offline' ||
-        (peerId.isNotEmpty &&
-            text == 'Failed to connect to $peerId: Please try later');
-    if (type == 'error' &&
-        title == 'Connection Error' &&
-        isTransientSessionError &&
-        _pi.isSet.isTrue) {
+    if (isTransientEstablishedSessionError(
+        type, title, text, peerId)) {
       // Auto retry for ~30s when an already-connected peer temporarily disappears during
       // account changes (e.g., signout, switch user, login into OS).
       // The actual wait may exceed 30s (e.g., 20s elapsed + 16s next retry = 36s), which is acceptable
@@ -1068,12 +1091,16 @@ class FfiModel with ChangeNotifier {
   /// Show a message box with [type], [title] and [text].
   showMsgBox(SessionID sessionId, String type, String title, String text,
       String link, bool hasRetry, OverlayDialogManager dialogManager,
-      {bool? hasCancel}) async {
+      {bool? hasCancel, bool suppressError = false}) async {
     final noteAllowed = parent.target != null &&
         allowAskForNoteAtEndOfConnection(parent.target, false) &&
         (title == "Connection Error" || type == "restarting");
     final showNoteEdit = noteAllowed && !hasRetry;
-    if (showNoteEdit) {
+    if (suppressError) {
+      dialogManager.dismissAll();
+      dialogManager.showLoading(translate('Connecting...'),
+          onCancel: closeConnection);
+    } else if (showNoteEdit) {
       await showConnEndAuditDialogCloseCanceled(
           ffi: parent.target!, type: type, title: title, text: text);
       closeConnection();
