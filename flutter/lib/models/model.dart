@@ -1022,6 +1022,8 @@ class FfiModel with ChangeNotifier {
 
     return text == 'Remote desktop is offline' ||
         text == 'Reset by the peer' ||
+        text.contains('10054') ||
+        text.contains('104') ||
         (peerId.isNotEmpty &&
             text == 'Failed to connect to $peerId: Please try later');
   }
