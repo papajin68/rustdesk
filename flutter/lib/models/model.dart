@@ -969,7 +969,8 @@ class FfiModel with ChangeNotifier {
     } else {
       var hasRetry = evt['hasRetry'] == 'true';
       if (!hasRetry) {
-        hasRetry = shouldAutoRetryOnOffline(type, title, text);
+        hasRetry = shouldAutoRetryOnTransientSessionError(
+            type, title, text, peerId);
       }
       showMsgBox(sessionId, type, title, text, link, hasRetry, dialogManager);
     }
@@ -997,19 +998,23 @@ class FfiModel with ChangeNotifier {
     reconnect(parent.target!.dialogManager, sessionId, false);
   }
 
-  /// Auto-retry check for "Remote desktop is offline" error.
+  /// Auto-retry transient connection errors after an established session.
   /// returns true to auto-retry, false otherwise.
-  bool shouldAutoRetryOnOffline(
+  bool shouldAutoRetryOnTransientSessionError(
     String type,
     String title,
     String text,
+    String peerId,
   ) {
+    final isTransientSessionError = text == 'Remote desktop is offline' ||
+        (peerId.isNotEmpty &&
+            text == 'Failed to connect to $peerId: Please try later');
     if (type == 'error' &&
         title == 'Connection Error' &&
-        text == 'Remote desktop is offline' &&
+        isTransientSessionError &&
         _pi.isSet.isTrue) {
-      // Auto retry for ~30s (server's peer offline threshold) when controlled peer's account changes
-      // (e.g., signout, switch user, login into OS) causes temporary offline via websocket/tcp connection.
+      // Auto retry for ~30s when an already-connected peer temporarily disappears during
+      // account changes (e.g., signout, switch user, login into OS).
       // The actual wait may exceed 30s (e.g., 20s elapsed + 16s next retry = 36s), which is acceptable
       // since the controlled side reconnects quickly after account changes.
       // Uses time-based check instead of _reconnects count because user can manually retry.
